@@ -51,9 +51,15 @@ describe('quota pacing', () => {
     expect(projection.runOutAt).toBeNull();
   });
 
-  it('keeps an unused rolling session untracked until it starts', () => {
-    expect(projectPace(quota(0, 0.5), now, true).severity).toBe('level');
-    expect(projectPace(quota(0, 0.5), now, false).severity).toBe('healthy');
+  it('keeps exact and clamped zero usage untracked', () => {
+    const untracked = {
+      severity: 'level',
+      projectedUsedPercent: null,
+      evenPacePercent: null,
+      runOutAt: null,
+    };
+    expect(projectPace(quota(0, 0.5), now)).toEqual(untracked);
+    expect(projectPace(quota(-0.1, 0.5), now)).toEqual(untracked);
   });
 
   it('shows only the flame when the projection lands at the limit or rounds to no spare', () => {
@@ -84,16 +90,19 @@ describe('quota pacing', () => {
   it('supports countdown and exact reset modes', () => {
     const reset = new Date(now + 90 * 60_000).toISOString();
     expect(formatReset(reset, now, 'countdown')).toBe('Resets in 1h 30m');
-    expect(formatReset(reset, now, 'exact')).toContain('Resets today at');
+    const laterToday = new Date(now);
+    laterToday.setHours(23, 59, 0, 0);
+    expect(formatReset(laterToday.toISOString(), now, 'exact')).toContain('Resets today at');
     expect(formatLimit(now + 39 * 60_000, now, 'countdown')).toBe('Limit in 39m');
     expect(formatLimit(now + 5 * 60_000, now, 'countdown')).toBe('Limit soon');
     expect(formatReset(new Date(now + 60 * 60_000).toISOString(), now, 'countdown')).toBe(
       'Resets in 1h',
     );
     expect(formatReset(new Date(now - 1).toISOString(), now, 'exact')).toBe('Resets soon');
-    expect(formatReset(new Date(now + 30 * 60 * 60_000).toISOString(), now, 'exact')).toContain(
-      'Resets tomorrow at',
-    );
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(12, 0, 0, 0);
+    expect(formatReset(tomorrow.toISOString(), now, 'exact')).toContain('Resets tomorrow at');
     expect(formatReset(new Date(now + 72 * 60 * 60_000).toISOString(), now, 'exact')).toMatch(
       /^Resets .+ at /,
     );

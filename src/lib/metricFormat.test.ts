@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { setUiLanguage, t } from './i18n';
 import {
   formatMetricNumber,
+  localizedCountUnit,
   formatMetricValue,
   formatSpendValue,
   totalSpendRingCenter,
@@ -32,6 +33,9 @@ describe('shared metric formatting', () => {
 
   it('uses the resolved UI locale for numbers, percentages, currency, and complete messages', () => {
     setUiLanguage('zh-CN');
+    expect(localizedCountUnit('credits')).toBe('额度');
+    expect(localizedCountUnit(' searches ')).toBe('次搜索');
+    expect(localizedCountUnit('custom units')).toBe('custom units');
     expect(formatMetricNumber(12345.6, 'count', 'full')).toBe('12,345.6');
     expect(formatMetricNumber(25, 'percent', 'row')).toBe('25%');
     expect(formatMetricNumber(12.5, 'dollars', 'full')).toContain('12.50');

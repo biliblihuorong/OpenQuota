@@ -1,6 +1,22 @@
 import type { Translation } from './en';
 
 export const zhTW: Translation = {
+  configure: '設定',
+  reduceAnimations: '減少動畫',
+  resetAllSettings: '重設所有設定…',
+  resetAllSettingsQuestion: '重設所有設定？',
+  resetAllSettingsMessage:
+    '這會還原外觀、通知、快捷鍵、更新、面板大小、服務供應商名稱和版面配置。服務供應商登入、API 金鑰和用量歷程記錄將保留。此操作無法復原。',
+  allSettingsRestored: '已還原所有設定',
+  settingsResetFailed: '無法重設設定。',
+  removeSavedApiKeyQuestion: '移除已儲存的 API 金鑰？',
+  removeSavedApiKeyMessage: '已儲存的金鑰將從安全儲存空間移除。此操作無法復原。',
+  removing: '正在移除…',
+  removeKey: '移除金鑰',
+  shortcutRecordingHelp:
+    '點擊開始錄製。錄製時按含修飾鍵的組合鍵以儲存，按 Delete 清除，或按 Escape 取消。',
+  settingsUnavailable: '設定無法使用。',
+  settingsMutationCancelled: '操作開始前設定已變更。',
   language: '語言',
   systemLanguage: '跟隨系統',
   english: 'English',
@@ -114,7 +130,6 @@ export const zhTW: Translation = {
   session: '工作階段',
   weekly: '每週',
   dollars: '美元',
-  onlyIncludes: '僅包含',
   and: '和',
   andMore: '等更多內容',
   totalSpend: '總消費',
@@ -126,7 +141,6 @@ export const zhTW: Translation = {
   onDemandMetrics: '依需求顯示的指標',
   dragMetricsHere: '將指標拖放到這裡',
   pin: '釘選',
-  unpin: '取消釘選',
   move: '移動 {label}',
   show: '顯示 {label}',
   enable: '啟用 {label}',
@@ -162,7 +176,6 @@ export const zhTW: Translation = {
   renameHint: '留白即可恢復預設名稱。',
   rename: '重新命名',
   removeSavedApiKey: '移除已儲存的 API 金鑰',
-  removingSavedApiKey: '正在移除已儲存的 API 金鑰…',
   overrideWithCustomKey: '使用自訂金鑰覆寫',
   fromYourEnvironment: '來自環境變數',
   fromConfigFile: '來自設定檔',

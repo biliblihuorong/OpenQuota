@@ -1,7 +1,7 @@
 <script lang="ts">
   import { t } from './i18n';
   import Icon from './Icon.svelte';
-  import { formatMetricNumber } from './metricFormat';
+  import { localizedCountUnit, formatMetricNumber } from './metricFormat';
   import {
     formatLimit,
     formatReset,
@@ -40,13 +40,7 @@
   }: Props = $props();
   const used = $derived(Math.min(100, Math.max(0, quota.usedPercent)));
   const remaining = $derived(Math.max(0, 100 - used));
-  const countUnit = $derived(
-    quota.unit?.trim() === 'searches'
-      ? t('searches')
-      : quota.unit?.trim() === 'requests'
-        ? t('requests')
-        : quota.unit?.trim() || t('requests'),
-  );
+  const countUnit = $derived(localizedCountUnit(quota.unit));
   const localizedLabel = $derived(label ?? quota.label);
   const estimateNote = $derived(
     providerId === 'opencode'
@@ -125,7 +119,7 @@
     return Math.min(100, Math.max(0, Math.round(usageDisplay === 'used' ? used : remaining)));
   });
   const freshSession = $derived(isFreshSessionWindow(quota, now, isSessionWindow));
-  const pace = $derived(projectPace(quota, now, isSessionWindow));
+  const pace = $derived(projectPace(quota, now));
   const paceDetail = $derived(paceTooltip(pace));
   const roundedUsed = $derived(Math.round(used));
   const severity = $derived(

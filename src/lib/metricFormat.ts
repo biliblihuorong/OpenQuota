@@ -51,6 +51,13 @@ function formatters() {
   return created;
 }
 
+export function localizedCountUnit(unit?: string | null) {
+  const label = unit?.trim() || 'requests';
+  return ['requests', 'searches', 'credits', 'tokens'].includes(label)
+    ? t(label as 'requests' | 'searches' | 'credits' | 'tokens')
+    : label;
+}
+
 export function formatMetricNumber(
   value: number,
   kind: MetricNumberKind,

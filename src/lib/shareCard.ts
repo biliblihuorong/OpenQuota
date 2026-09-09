@@ -6,6 +6,7 @@ import {
 } from './metrics';
 import { t } from './i18n';
 import {
+  localizedCountUnit,
   formatMetricNumber,
   formatMetricValue,
   formatSpendValue,
@@ -136,7 +137,7 @@ export function buildProviderShareRows(
     if (source.kind === 'quota' || source.kind === 'quotaOrValue') {
       const quota = snapshot.quotas.find((item) => item.id === source.sourceId);
       if (quota) {
-        rows.push(quotaShareRow(quota, definition.label, settings, now, source.sessionWindow));
+        rows.push(quotaShareRow(quota, definition.label, settings, now));
       } else if (source.kind === 'quotaOrValue') {
         const valueMetric = snapshot.valueMetrics.find((item) => item.id === source.sourceId);
         rows.push({
@@ -328,7 +329,6 @@ function quotaShareRow(
   label: string,
   settings: AppSettings,
   now: number,
-  sessionWindow: boolean,
 ): ShareRow {
   const used = clamp(quota.usedPercent, 0, 100);
   const remaining = Math.max(0, 100 - used);
@@ -341,19 +341,13 @@ function quotaShareRow(
   });
   let fillPercent = settings.usageDisplay === 'used' ? used : remaining;
   if (quota.format === 'count' && quota.usedValue !== null && quota.limitValue !== null) {
-    const unit = quota.unit?.trim();
     const displayed =
       settings.usageDisplay === 'left'
         ? Math.max(0, quota.limitValue - quota.usedValue)
         : quota.usedValue;
     reading = t(settings.usageDisplay === 'left' ? 'countLeft' : 'countUsed', {
       count: formatMetricNumber(displayed, 'count', 'full'),
-      unit:
-        unit === 'searches'
-          ? t('searches')
-          : unit === 'requests'
-            ? t('requests')
-            : unit || t('requests'),
+      unit: localizedCountUnit(quota.unit),
     });
   }
   if (quota.format === 'dollars' && quota.usedValue !== null) {
@@ -369,7 +363,7 @@ function quotaShareRow(
     }
   }
 
-  const pace = projectPace(quota, now, sessionWindow);
+  const pace = projectPace(quota, now);
   const severity =
     pace.severity === 'spent' || pace.severity === 'runningOut'
       ? 'critical'

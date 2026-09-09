@@ -32,6 +32,8 @@ jobs:
     runs-on: ubuntu-22.04
     outputs:
       release_commit: ${{ steps.trusted_tag.outputs.release_commit }}
+      windows_signing: ${{ steps.signing_policy.outputs.windows_signing }}
+      macos_signing: ${{ steps.signing_policy.outputs.macos_signing }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -60,14 +62,64 @@ jobs:
           test "$(git rev-parse HEAD)" = "$tag_commit"
           echo "release_commit=$tag_commit" >> "$GITHUB_OUTPUT"
 
-      - name: Validate updater signing configuration
+      - name: Resolve release signing policy
+        id: signing_policy
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          ENABLE_WINDOWS_NATIVE_SIGNING: ${{ vars.ENABLE_WINDOWS_NATIVE_SIGNING || 'false' }}
+          ENABLE_MACOS_NATIVE_SIGNING: ${{ vars.ENABLE_MACOS_NATIVE_SIGNING || 'false' }}
         run: |
-          test -n "$TAURI_SIGNING_PRIVATE_KEY" || {
-            echo 'Missing required secret: TAURI_SIGNING_PRIVATE_KEY' >&2
-            exit 1
+          set -euo pipefail
+          normalize_policy() {
+            local name="$1"
+            local value="$2"
+            case "$value" in
+              true | false) printf '%s' "$value" ;;
+              *)
+                echo "::error::$name must be either true or false." >&2
+                return 1
+                ;;
+            esac
           }
+
+          windows_signing="$(normalize_policy ENABLE_WINDOWS_NATIVE_SIGNING "$ENABLE_WINDOWS_NATIVE_SIGNING")"
+          macos_signing="$(normalize_policy ENABLE_MACOS_NATIVE_SIGNING "$ENABLE_MACOS_NATIVE_SIGNING")"
+          echo "windows_signing=$windows_signing" >> "$GITHUB_OUTPUT"
+          echo "macos_signing=$macos_signing" >> "$GITHUB_OUTPUT"
+
+      - name: Validate release signing credentials
+        if: ${{ !inputs.verify_only }}
+        env:
+          WINDOWS_SIGNING_ENABLED: ${{ steps.signing_policy.outputs.windows_signing }}
+          MACOS_SIGNING_ENABLED: ${{ steps.signing_policy.outputs.macos_signing }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          ES_USERNAME: ${{ steps.signing_policy.outputs.windows_signing == 'true' && secrets.ES_USERNAME || '' }}
+          ES_PASSWORD: ${{ steps.signing_policy.outputs.windows_signing == 'true' && secrets.ES_PASSWORD || '' }}
+          ES_CREDENTIAL_ID: ${{ steps.signing_policy.outputs.windows_signing == 'true' && secrets.ES_CREDENTIAL_ID || '' }}
+          ES_TOTP_SECRET: ${{ steps.signing_policy.outputs.windows_signing == 'true' && secrets.ES_TOTP_SECRET || '' }}
+          WINDOWS_SIGNER_SUBJECT: ${{ steps.signing_policy.outputs.windows_signing == 'true' && vars.WINDOWS_SIGNER_SUBJECT || '' }}
+          APPLE_CERTIFICATE: ${{ steps.signing_policy.outputs.macos_signing == 'true' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ steps.signing_policy.outputs.macos_signing == 'true' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_ID: ${{ steps.signing_policy.outputs.macos_signing == 'true' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ steps.signing_policy.outputs.macos_signing == 'true' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ steps.signing_policy.outputs.macos_signing == 'true' && secrets.APPLE_TEAM_ID || '' }}
+        run: |
+          required=(TAURI_SIGNING_PRIVATE_KEY)
+          if [[ "$WINDOWS_SIGNING_ENABLED" = true ]]; then
+            required+=(ES_USERNAME ES_PASSWORD ES_CREDENTIAL_ID ES_TOTP_SECRET WINDOWS_SIGNER_SUBJECT)
+          else
+            echo '::warning::Windows artifacts will not be Authenticode-signed.'
+          fi
+          if [[ "$MACOS_SIGNING_ENABLED" = true ]]; then
+            required+=(APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID)
+          else
+            echo '::warning::macOS artifacts will use ad-hoc signing and will not be notarized.'
+          fi
+          for name in "${required[@]}"; do
+            test -n "${!name:-}" || {
+              echo "Missing required release signing value: $name" >&2
+              exit 1
+            }
+          done
 
       - name: Install Linux dependencies
         run: |
@@ -158,6 +210,7 @@ jobs:
               --generate-notes \
               --notes $'OpenQuota desktop release for Windows and Linux on x64/ARM64, plus a macOS Universal build.\n\nAutomatic updates are cryptographically signed. Linux in-app updates are supported by AppImage builds; Debian packages update through the package installer.'
           fi
+
           release_id="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json databaseId --jq '.databaseId')"
           test -n "$release_id"
           echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
@@ -174,26 +227,31 @@ jobs:
           - name: Windows x64
             platform: windows-latest
             args: --bundles nsis --config src-tauri/tauri.release.conf.json
+            windows-signing-args: --config src-tauri/tauri.windows-signing.conf.json
             rust-targets: ''
             smoke-artifact-root: src-tauri/target/release/bundle
           - name: Windows ARM64
             platform: windows-11-arm
             args: --target aarch64-pc-windows-msvc --bundles nsis --config src-tauri/tauri.release.conf.json
+            windows-signing-args: --config src-tauri/tauri.windows-signing.conf.json
             rust-targets: aarch64-pc-windows-msvc
             smoke-artifact-root: src-tauri/target/aarch64-pc-windows-msvc/release/bundle
           - name: Linux x64
             platform: ubuntu-22.04
             args: --bundles deb,appimage --config src-tauri/tauri.release.conf.json
+            windows-signing-args: ''
             rust-targets: ''
             smoke-artifact-root: src-tauri/target/release/bundle
           - name: Linux ARM64
             platform: ubuntu-22.04-arm
             args: --target aarch64-unknown-linux-gnu --bundles deb,appimage --config src-tauri/tauri.release.conf.json
+            windows-signing-args: ''
             rust-targets: aarch64-unknown-linux-gnu
             smoke-artifact-root: src-tauri/target/aarch64-unknown-linux-gnu/release/bundle
           - name: macOS Universal
             platform: macos-latest
             args: --target universal-apple-darwin --bundles app,dmg --config src-tauri/tauri.release.conf.json
+            windows-signing-args: ''
             rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
             smoke-artifact-root: src-tauri/target/universal-apple-darwin/release/bundle
 
@@ -207,6 +265,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            dbus-tests \
             dbus-x11 \
             libayatana-appindicator3-dev \
             libwebkit2gtk-4.1-dev \
@@ -242,13 +301,60 @@ jobs:
         if: runner.os == 'Linux'
         run: bash .github/scripts/setup-linuxdeploy.sh
 
+      - name: Prepare Windows code signing
+        if: runner.os == 'Windows' && needs.validate.outputs.windows_signing == 'true'
+        shell: pwsh
+        env:
+          ES_USERNAME: ${{ secrets.ES_USERNAME }}
+          ES_PASSWORD: ${{ secrets.ES_PASSWORD }}
+          ES_CREDENTIAL_ID: ${{ secrets.ES_CREDENTIAL_ID }}
+          ES_TOTP_SECRET: ${{ secrets.ES_TOTP_SECRET }}
+        run: .github/scripts/setup-windows-signing.ps1
+
+      - name: Configure ad-hoc macOS signing
+        if: runner.os == 'macOS' && needs.validate.outputs.macos_signing != 'true'
+        shell: bash
+        run: echo 'APPLE_SIGNING_IDENTITY=-' >> "$GITHUB_ENV"
+
+      - name: Configure native macOS signing
+        if: runner.os == 'macOS' && needs.validate.outputs.macos_signing == 'true'
+        shell: bash
+        env:
+          OPENQUOTA_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          OPENQUOTA_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          OPENQUOTA_APPLE_ID: ${{ secrets.APPLE_ID }}
+          OPENQUOTA_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          OPENQUOTA_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          write_env() {
+            local name="$1"
+            local value="$2"
+            local delimiter="OPENQUOTA_$(uuidgen)"
+            {
+              printf '%s<<%s\n' "$name" "$delimiter"
+              printf '%s\n' "$value"
+              printf '%s\n' "$delimiter"
+            } >> "$GITHUB_ENV"
+          }
+
+          write_env APPLE_CERTIFICATE "$OPENQUOTA_APPLE_CERTIFICATE"
+          write_env APPLE_CERTIFICATE_PASSWORD "$OPENQUOTA_APPLE_CERTIFICATE_PASSWORD"
+          write_env APPLE_ID "$OPENQUOTA_APPLE_ID"
+          write_env APPLE_PASSWORD "$OPENQUOTA_APPLE_PASSWORD"
+          write_env APPLE_TEAM_ID "$OPENQUOTA_APPLE_TEAM_ID"
+
       - name: Build and upload platform artifacts
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
+          ES_USERNAME: ${{ runner.os == 'Windows' && needs.validate.outputs.windows_signing == 'true' && secrets.ES_USERNAME || '' }}
+          ES_PASSWORD: ${{ runner.os == 'Windows' && needs.validate.outputs.windows_signing == 'true' && secrets.ES_PASSWORD || '' }}
+          ES_CREDENTIAL_ID: ${{ runner.os == 'Windows' && needs.validate.outputs.windows_signing == 'true' && secrets.ES_CREDENTIAL_ID || '' }}
+          ES_TOTP_SECRET: ${{ runner.os == 'Windows' && needs.validate.outputs.windows_signing == 'true' && secrets.ES_TOTP_SECRET || '' }}
+          OPENQUOTA_EXPECTED_WINDOWS_SIGNER_SUBJECT: ${{ runner.os == 'Windows' && needs.validate.outputs.windows_signing == 'true' && vars.WINDOWS_SIGNER_SUBJECT || '' }}
         with:
           releaseId: ${{ needs.prepare-release.outputs.release_id }}
           releaseDraft: true
@@ -256,12 +362,24 @@ jobs:
           updaterJsonPreferNsis: true
           uploadUpdaterSignatures: true
           retryAttempts: 2
-          args: ${{ matrix.args }}
+          args: >-
+            ${{ matrix.args }}
+            ${{ runner.os == 'Windows' && needs.validate.outputs.windows_signing == 'true' && matrix.windows-signing-args || '' }}
+
+      - name: Check out release smoke tooling
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-workflow
+          sparse-checkout: .github/actions/platform-smoke
 
       - name: Smoke test release artifact
-        uses: ./.github/actions/platform-smoke
+        uses: ./.release-workflow/.github/actions/platform-smoke
         with:
           artifact-root: ${{ matrix.smoke-artifact-root }}
+          release-validation: ${{ (runner.os == 'Linux' || (runner.os == 'Windows' && needs.validate.outputs.windows_signing == 'true') || (runner.os == 'macOS' && needs.validate.outputs.macos_signing == 'true')) && 'true' || 'false' }}
+          windows-signer-subject: ${{ runner.os == 'Windows' && needs.validate.outputs.windows_signing == 'true' && vars.WINDOWS_SIGNER_SUBJECT || '' }}
+          apple-team-id: ${{ runner.os == 'macOS' && needs.validate.outputs.macos_signing == 'true' && secrets.APPLE_TEAM_ID || '' }}
 
   publish-release:
     name: Verify and publish release
@@ -276,9 +394,9 @@ jobs:
       - name: Verify release smoke checks
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERIFY_ONLY: ${{ inputs.verify_only }}
         run: |
           mkdir -p release-check
-          commit="$(git rev-parse HEAD)"
           required=(
             'Build and smoke Windows x64'
             'Build and smoke Windows ARM64'
@@ -288,15 +406,24 @@ jobs:
           )
           verified=false
           for attempt in 1 2 3 4 5; do
-            gh api \
-              -H 'Accept: application/vnd.github+json' \
-              "repos/$GITHUB_REPOSITORY/commits/$commit/check-runs?filter=all&per_page=100" \
-              > release-check/check-runs.json
+            if [[ "$VERIFY_ONLY" = true ]]; then
+              commit="$(git rev-parse HEAD)"
+              gh api \
+                -H 'Accept: application/vnd.github+json' \
+                "repos/$GITHUB_REPOSITORY/commits/$commit/check-runs?filter=all&per_page=100" \
+                > release-check/smoke-checks.json
+              jobs_key=check_runs
+            else
+              gh api \
+                "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" \
+                > release-check/smoke-checks.json
+              jobs_key=jobs
+            fi
             missing=0
             for name in "${required[@]}"; do
-              if ! jq -e --arg name "$name" \
-                '.check_runs | any(.name == $name and .conclusion == "success")' \
-                release-check/check-runs.json >/dev/null; then
+              if ! jq -e --arg key "$jobs_key" --arg name "$name" \
+                '.[$key] | any(.name == $name and .conclusion == "success")' \
+                release-check/smoke-checks.json >/dev/null; then
                 echo "Required release smoke check is not successful: $name"
                 missing=1
               fi

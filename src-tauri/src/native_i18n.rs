@@ -12,26 +12,25 @@ impl Locale {
         match preference {
             "zh-CN" => Self::ZhCn,
             "zh-TW" => Self::ZhTw,
-            "system" => system_language()
-                .as_deref()
-                .map(Self::from_language_tag)
-                .unwrap_or(Self::En),
+            "system" => *SYSTEM_LOCALE.get_or_init(|| {
+                system_language()
+                    .as_deref()
+                    .map(Self::from_language_tag)
+                    .unwrap_or(Self::En)
+            }),
             _ => Self::En,
         }
     }
 
     pub fn from_language_tag(language: &str) -> Self {
         let normalized = normalize_locale_tag(language);
-        if normalized == "zh-tw"
-            || normalized == "zh-hk"
-            || normalized == "zh-mo"
-            || normalized.starts_with("zh-hant")
-        {
-            Self::ZhTw
-        } else if normalized.starts_with("zh") {
-            Self::ZhCn
-        } else {
-            Self::En
+        let mut subtags = normalized.split('-');
+        if subtags.next() != Some("zh") {
+            return Self::En;
+        }
+        match subtags.next() {
+            Some("hant" | "tw" | "hk" | "mo") => Self::ZhTw,
+            _ => Self::ZhCn,
         }
     }
 
@@ -43,6 +42,9 @@ impl Locale {
         }
     }
 }
+
+// Keep frontend settings, menus, and notifications on one native resolution per launch.
+static SYSTEM_LOCALE: std::sync::OnceLock<Locale> = std::sync::OnceLock::new();
 
 fn normalize_locale_tag(language: &str) -> String {
     language
@@ -227,7 +229,21 @@ pub fn count_unit(locale: Locale, unit: &str) -> String {
         (Locale::ZhCn, "searches") => "次搜索".to_owned(),
         (Locale::ZhTw, "requests") => "次要求".to_owned(),
         (Locale::ZhTw, "searches") => "次搜尋".to_owned(),
+        (Locale::ZhCn, "tokens") => "个令牌".to_owned(),
+        (Locale::ZhTw, "tokens") => "個權杖".to_owned(),
+        (Locale::ZhCn, "credits") => "额度".to_owned(),
+        (Locale::ZhTw, "credits") => "額度".to_owned(),
+        (Locale::ZhCn, "available") => "可用".to_owned(),
+        (Locale::ZhTw, "available") => "可用".to_owned(),
         _ => unit.to_owned(),
+    }
+}
+
+pub fn quota_detail(locale: Locale, label: &str, reading: &str, used: bool) -> String {
+    let word = usage_word(locale, used);
+    match locale {
+        Locale::En => format!("{label} {reading} {word}"),
+        Locale::ZhCn | Locale::ZhTw => format!("{label}：{word} {reading}"),
     }
 }
 
@@ -264,6 +280,55 @@ mod tests {
     use crate::models::MetricLabelKind;
 
     #[test]
+    fn native_quota_sentences_follow_locale_word_order() {
+        assert_eq!(
+            super::quota_detail(Locale::En, "Weekly", "75%", false),
+            "Weekly 75% left"
+        );
+        assert_eq!(
+            super::quota_detail(Locale::ZhCn, "每周", "75%", false),
+            "每周：剩余 75%"
+        );
+        assert_eq!(
+            super::quota_detail(Locale::ZhTw, "要求", "25 次要求", true),
+            "要求：已用 25 次要求"
+        );
+        assert_eq!(super::count_unit(Locale::ZhCn, "credits"), "额度");
+        assert_eq!(super::count_unit(Locale::ZhTw, "tokens"), "個權杖");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn system_language_uses_foundation_preferences() {
+        let expected = objc2_foundation::NSLocale::preferredLanguages()
+            .firstObject()
+            .map(|language| Locale::from_language_tag(&language.to_string()))
+            .unwrap_or(Locale::En);
+        assert_eq!(Locale::for_preference("system"), expected);
+    }
+
+    #[test]
+    fn mac_bundle_declares_manually_localized_languages() {
+        let plist = roxmltree::Document::parse_with_options(
+            include_str!("../Info.plist"),
+            roxmltree::ParsingOptions {
+                allow_dtd: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let languages = plist
+            .descendants()
+            .find(|node| node.has_tag_name("array"))
+            .unwrap()
+            .children()
+            .filter(|node| node.has_tag_name("string"))
+            .map(|node| node.text().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(languages, ["en", "zh-Hans", "zh-Hant"]);
+    }
+
+    #[test]
     fn language_tags_match_frontend_resolution() {
         assert_eq!(super::normalize_locale_tag("zh_CN.UTF-8"), "zh-cn");
         assert_eq!(super::normalize_locale_tag("zh_TW@variant"), "zh-tw");
@@ -272,6 +337,13 @@ mod tests {
         assert_eq!(Locale::from_language_tag("zh-TW"), Locale::ZhTw);
         assert_eq!(Locale::from_language_tag("zh-HK"), Locale::ZhTw);
         assert_eq!(Locale::from_language_tag("zh-Hant"), Locale::ZhTw);
+        assert_eq!(
+            Locale::from_language_tag("zh-TW-u-nu-hanidec"),
+            Locale::ZhTw
+        );
+        assert_eq!(Locale::from_language_tag("zh-Hans-HK"), Locale::ZhCn);
+        assert_eq!(Locale::from_language_tag("zh-Hant-CN"), Locale::ZhTw);
+        assert_eq!(Locale::from_language_tag("zho"), Locale::En);
         assert_eq!(Locale::from_language_tag("fr-FR"), Locale::En);
         assert_eq!(Locale::from_language_tag("C"), Locale::En);
         assert_eq!(Locale::from_language_tag("POSIX"), Locale::En);
@@ -315,5 +387,54 @@ mod tests {
         assert_eq!(super::count_unit(Locale::ZhTw, "searches"), "次搜尋");
         assert_eq!(super::usage_word(Locale::ZhCn, false), "剩余");
         assert_eq!(super::metric_label(Locale::En, None, "Custom"), "Custom");
+    }
+
+    #[test]
+    fn all_builtin_pinnable_metrics_have_native_localizations() {
+        use crate::providers::{
+            antigravity, claude, codex, copilot, cursor, devin, grok, kimi, minimax, opencode,
+            openrouter, zai,
+        };
+        for provider in [
+            antigravity::definition(),
+            claude::definition(),
+            codex::definition(),
+            copilot::definition(),
+            cursor::definition(),
+            devin::definition(),
+            grok::definition(),
+            kimi::definition(),
+            minimax::definition(),
+            opencode::definition(),
+            openrouter::definition(),
+            zai::definition(),
+        ] {
+            for metric in provider.metrics.iter().filter(|metric| metric.pinnable) {
+                let model_name = match metric.id.as_str() {
+                    "antigravity.claude" => Some("Claude"),
+                    "claude.sonnet" => Some("Sonnet"),
+                    "claude.fable" => Some("Fable"),
+                    "codex.spark" => Some("Spark"),
+                    _ => None,
+                };
+                if let Some(name) = model_name {
+                    assert_eq!(metric.label, name);
+                    continue;
+                }
+                assert!(
+                    metric.label_kind.is_some(),
+                    "{} has no label semantics",
+                    metric.id
+                );
+                for locale in [Locale::ZhCn, Locale::ZhTw] {
+                    assert_ne!(
+                        super::metric_label(locale, metric.label_kind, &metric.label),
+                        metric.label,
+                        "{} is not translated",
+                        metric.id
+                    );
+                }
+            }
+        }
     }
 }

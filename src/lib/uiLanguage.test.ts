@@ -27,6 +27,26 @@ import app from '../App.svelte?raw';
 const css = `${tokensCss}\n${layoutCss}\n${sharedComponentCss}\n${coLocatedComponentCss}`;
 
 describe('native UI language contract', () => {
+  it('keeps translated placeholders aligned while supporting partial catalogs', () => {
+    const placeholders = (value: string) =>
+      [...value.matchAll(/\{(\w+)\}/g)].map((match) => match[1]).sort();
+    for (const catalog of [zhCN, zhTW]) {
+      for (const [key, value] of Object.entries(catalog)) {
+        expect(value.trim(), key).not.toBe('');
+        expect(placeholders(value), key).toEqual(placeholders(en[key as keyof typeof en]));
+      }
+    }
+  });
+
+  it('does not override native system resolution with the webview language', () => {
+    setUiLanguage('system', 'zh-TW');
+    expect(t('settings')).toBe('設定');
+    setUiLanguage('system', 'en');
+    expect(t('settings')).toBe('Settings');
+    setUiLanguage('system', 'invalid');
+    expect(getUiLanguage()).toBe('en');
+  });
+
   it('uses the platform system font and reference type sizes', () => {
     expect(css).toMatch(/font-family:\s*system-ui,/);
     expect(css).not.toMatch(/font-family:\s*Inter/);
@@ -116,6 +136,10 @@ describe('native UI language contract', () => {
     expect(resolveSystemLanguage('zh-HK')).toBe('zh-TW');
     expect(resolveSystemLanguage('zh-MO')).toBe('zh-TW');
     expect(resolveSystemLanguage('zh-SG')).toBe('zh-CN');
+    expect(resolveSystemLanguage('zh-TW-u-nu-hanidec')).toBe('zh-TW');
+    expect(resolveSystemLanguage('zh-Hans-HK')).toBe('zh-CN');
+    expect(resolveSystemLanguage('zh-Hant-CN')).toBe('zh-TW');
+    expect(resolveSystemLanguage('zho')).toBe('en');
     expect(resolveSystemLanguage('fr-FR')).toBe('en');
   });
 

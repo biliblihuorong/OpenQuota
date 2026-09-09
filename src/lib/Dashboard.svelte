@@ -1,6 +1,6 @@
 <script lang="ts">
   import { t } from './i18n';
-  import { onDestroy } from 'svelte';
+  import { onDestroy, tick } from 'svelte';
   import { flip } from 'svelte/animate';
   import { scale, slide } from 'svelte/transition';
   import { reorderFlip, springMotion } from './motion';
@@ -41,7 +41,7 @@
     onRenameProvider: (providerId: string) => void;
     onShare: (providerId: string) => void;
     onShareTotal: (projection: SpendProjection) => boolean | Promise<boolean>;
-    onRefresh: (providerId: string) => void;
+    onRefresh: (providerId: string) => void | Promise<void>;
     onOpenProviderLink: (providerId: string, linkIndex: number) => void;
     onContentMorph: () => void;
     reducedMotion: boolean;
@@ -100,6 +100,14 @@
       warnings: [],
       refreshedAt: '1970-01-01T00:00:00.000Z',
     };
+  }
+  async function retryProvider(event: MouseEvent, providerId: string, refreshing: boolean) {
+    if (refreshing) return;
+    const button = event.currentTarget as HTMLButtonElement;
+    const providerSection = button.closest<HTMLElement>('.provider-section');
+    await onRefresh(providerId);
+    await tick();
+    if (!button.isConnected) providerSection?.focus({ preventScroll: true });
   }
   let providerMenu = $state<{ id: string; x: number; y: number } | null>(null);
   let metricMenu = $state<{ providerId: string; metricId: string; x: number; y: number } | null>(
@@ -422,6 +430,7 @@
       data-reorder-group="dashboard-providers"
       data-reorder-id={provider.id}
       role="group"
+      tabindex="-1"
       aria-label={t('providerGroup', { provider: providerDisplayName(provider.id) })}
       use:pointerReorder={{
         id: provider.id,
@@ -455,7 +464,9 @@
         {#if snapshot.plan}<span class="plan">{snapshot.plan}</span>{/if}
         {#if state?.snapshot && state.stale}<span
             class="status-badge"
-            data-tooltip={stalenessTooltip(snapshot.refreshedAt)}>{t('outdated')}</span
+            data-tooltip={stalenessTooltip(snapshot.refreshedAt)}
+            >{t('outdated')}<span class="sr-only">. {stalenessTooltip(snapshot.refreshedAt)}</span
+            ></span
           >{/if}
         <span
           class="provider-status-slot"
@@ -466,14 +477,8 @@
               ><Icon name="refresh" size={12} strokeWidth={2} /></span
             >
           {:else if state?.error}
-            <span
-              class="provider-warning"
-              role="alert"
-              data-tooltip={state.error}
-              aria-label={state.error}
-              ><Icon name="warning" size={12} strokeWidth={2} /><span class="sr-only"
-                >{state.error}</span
-              ></span
+            <span class="provider-warning" data-tooltip={state.error} aria-hidden="true"
+              ><Icon name="warning" size={12} strokeWidth={2} /></span
             >
           {:else if snapshot.warnings.length > 0}
             <span
@@ -497,6 +502,30 @@
         {#each snapshot.notices as notice (notice.id)}
           <ProviderNoticeRow {notice} />
         {/each}
+        {#if state?.error}
+          <div class="provider-error-row">
+            <span class="provider-error-row__icon" aria-hidden="true"
+              ><Icon name="warning" size={12} strokeWidth={2} /></span
+            >
+            <span class="provider-error-row__message" role="alert">{state.error}</span>
+            <span class="provider-error-row__actions">
+              {#if catalog.supportsApiKeyConfiguration(provider.id) && (state.errorKind === 'authentication' || state.errorKind === 'permission' || state.errorKind === 'credentialStorage')}
+                <button
+                  type="button"
+                  aria-label={`Configure ${providerDisplayName(provider.id)}`}
+                  onclick={() => onOpenProviderCustomize(provider.id)}>{t('configure')}</button
+                >
+              {/if}
+              <button
+                type="button"
+                aria-label={`${state.refreshing ? 'Retrying' : 'Retry'} ${providerDisplayName(provider.id)}`}
+                aria-disabled={state.refreshing}
+                onclick={(event) => void retryProvider(event, provider.id, state.refreshing)}
+                >{state.refreshing ? 'Retrying…' : 'Retry'}</button
+              >
+            </span>
+          </div>
+        {/if}
         {#each alwaysMetrics as metric (metric.id)}
           <div
             class="metric-context-target"
@@ -715,6 +744,12 @@
 {/if}
 
 <style>
+  .provider-section:focus-visible {
+    border-radius: 9px;
+    outline: 2px solid var(--meter-fill);
+    outline-offset: 2px;
+  }
+
   :global {
     .provider-header {
       display: flex;
@@ -813,6 +848,49 @@
       padding: 5px 12px;
       border-radius: 12px;
       background: var(--card);
+    }
+
+    .provider-error-row {
+      display: grid;
+      grid-template-columns: 14px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 7px;
+      padding: 7px 0;
+      border-bottom: 1px solid var(--separator);
+      color: var(--text);
+      font-size: 10px;
+      line-height: 1.3;
+    }
+
+    .provider-error-row__icon {
+      display: grid;
+      color: var(--warning);
+      place-items: center;
+    }
+
+    .provider-error-row__message {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .provider-error-row__actions {
+      display: flex;
+      gap: 4px;
+    }
+
+    .provider-error-row button {
+      padding: 3px 6px;
+      border: 1px solid var(--separator);
+      border-radius: 5px;
+      color: var(--text);
+      background: transparent;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .provider-error-row button:hover {
+      background: var(--button-hover);
     }
 
     .demand-divider {

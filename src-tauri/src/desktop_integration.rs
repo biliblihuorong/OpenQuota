@@ -23,7 +23,7 @@ pub enum LinuxDesktop {
 
 #[derive(Debug, Clone)]
 pub struct DesktopIntegration {
-    tray_available: bool,
+    tray_available: Arc<AtomicBool>,
     floating_window: Arc<AtomicBool>,
     #[cfg(any(target_os = "linux", test))]
     platform_summary: Option<PlatformSummary>,
@@ -34,7 +34,6 @@ pub struct DesktopIntegration {
 struct PlatformSummary {
     desktop: LinuxDesktop,
     session: LinuxSessionType,
-    tray_available: bool,
 }
 
 impl DesktopIntegration {
@@ -49,7 +48,7 @@ impl DesktopIntegration {
         #[cfg(not(target_os = "linux"))]
         {
             Self {
-                tray_available: true,
+                tray_available: Arc::new(AtomicBool::new(true)),
                 floating_window: Arc::new(AtomicBool::new(false)),
                 #[cfg(test)]
                 platform_summary: None,
@@ -58,7 +57,7 @@ impl DesktopIntegration {
     }
 
     pub fn tray_available(&self) -> bool {
-        self.tray_available
+        self.tray_available.load(Ordering::SeqCst)
     }
 
     pub fn is_floating(&self) -> bool {
@@ -66,13 +65,19 @@ impl DesktopIntegration {
     }
 
     pub fn exits_on_close(&self) -> bool {
-        self.is_floating() && !self.tray_available
+        self.is_floating() && !self.tray_available()
     }
 
     pub fn apply_window_mode(&self, mode: WindowMode) -> bool {
-        let floating = !self.tray_available || mode == WindowMode::Floating;
+        let floating = !self.tray_available() || mode == WindowMode::Floating;
         self.set_floating(floating);
         floating
+    }
+
+    pub fn disable_tray(&self) -> bool {
+        let changed = self.tray_available.swap(false, Ordering::SeqCst);
+        self.set_floating(true);
+        changed
     }
 
     pub(crate) fn set_floating(&self, floating: bool) {
@@ -107,7 +112,7 @@ impl DesktopIntegration {
                     crate::native_i18n::Locale::ZhTw => "未知工作階段",
                 },
             };
-            let mode = match (locale, summary.tray_available) {
+            let mode = match (locale, self.tray_available()) {
                 (crate::native_i18n::Locale::En, true) => "StatusNotifier tray",
                 (crate::native_i18n::Locale::En, false) => "standalone window",
                 (crate::native_i18n::Locale::ZhCn, true) => "StatusNotifier 托盘",
@@ -127,13 +132,9 @@ fn linux_integration(
     tray_available: bool,
 ) -> DesktopIntegration {
     DesktopIntegration {
-        tray_available,
+        tray_available: Arc::new(AtomicBool::new(tray_available)),
         floating_window: Arc::new(AtomicBool::new(!tray_available)),
-        platform_summary: Some(PlatformSummary {
-            desktop,
-            session,
-            tray_available,
-        }),
+        platform_summary: Some(PlatformSummary { desktop, session }),
     }
 }
 
@@ -184,6 +185,46 @@ fn status_notifier_host_available() -> bool {
             .iter()
             .any(|name| name.as_str() == "org.kde.StatusNotifierWatcher")
     })
+}
+
+#[cfg(target_os = "linux")]
+pub fn status_notifier_monitor_forced_off() -> bool {
+    matches!(
+        std::env::var("OPENQUOTA_LINUX_TRAY_HOST").as_deref(),
+        Ok("available" | "unavailable")
+    )
+}
+
+#[cfg(target_os = "linux")]
+pub fn wait_for_status_notifier_loss() -> Result<(), String> {
+    const WATCHER_NAME: &str = "org.kde.StatusNotifierWatcher";
+
+    let connection = zbus::blocking::Connection::session()
+        .map_err(|error| format!("session bus unavailable: {error}"))?;
+    let proxy = zbus::blocking::fdo::DBusProxy::new(&connection)
+        .map_err(|error| format!("session bus proxy unavailable: {error}"))?;
+    let changes = proxy
+        .receive_name_owner_changed_with_args(&[(0, WATCHER_NAME)])
+        .map_err(|error| format!("watcher subscription failed: {error}"))?;
+
+    let available = proxy
+        .list_names()
+        .map_err(|error| format!("watcher snapshot failed: {error}"))?
+        .iter()
+        .any(|name| name.as_str() == WATCHER_NAME);
+    if !available {
+        return Ok(());
+    }
+
+    for change in changes {
+        let arguments = change
+            .args()
+            .map_err(|error| format!("watcher signal invalid: {error}"))?;
+        if arguments.name().as_str() == WATCHER_NAME && arguments.new_owner().as_ref().is_none() {
+            return Ok(());
+        }
+    }
+    Err("watcher signal stream ended".to_owned())
 }
 
 #[cfg(test)]
@@ -238,5 +279,21 @@ mod tests {
         assert!(!without_tray.tray_available());
         assert!(without_tray.apply_window_mode(WindowMode::Popup));
         assert!(without_tray.exits_on_close());
+    }
+
+    #[test]
+    fn losing_the_tray_permanently_falls_back_to_a_visible_window_mode() {
+        let integration = super::linux_integration(LinuxSessionType::X11, LinuxDesktop::Kde, true);
+        assert!(!integration.apply_window_mode(WindowMode::Popup));
+
+        assert!(integration.disable_tray());
+        assert!(!integration.tray_available());
+        assert!(integration.is_floating());
+        assert!(integration.exits_on_close());
+        assert_eq!(
+            integration.platform_summary("en").as_deref(),
+            Some("KDE Plasma · X11 · standalone window")
+        );
+        assert!(!integration.disable_tray());
     }
 }

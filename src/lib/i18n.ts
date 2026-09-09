@@ -34,28 +34,19 @@ export function resolveSystemLanguage(
   language = typeof navigator === 'undefined' ? '' : navigator.language,
 ): UiLanguage {
   const normalized = normalizeLocaleTag(language);
-  if (
-    normalized === 'zh-tw' ||
-    normalized === 'zh-hk' ||
-    normalized === 'zh-mo' ||
-    normalized.startsWith('zh-hant')
-  )
-    return 'zh-TW';
-  if (normalized.startsWith('zh')) return 'zh-CN';
-  return 'en';
+  const [base, scriptOrRegion] = normalized.split('-');
+  if (base !== 'zh') return 'en';
+  return ['hant', 'tw', 'hk', 'mo'].includes(scriptOrRegion) ? 'zh-TW' : 'zh-CN';
 }
 
 let preference: LanguagePreference = 'system';
-let currentLanguage: UiLanguage = resolveSystemLanguage();
-export const uiLanguage = writable<UiLanguage>(currentLanguage);
+export const uiLanguage = writable<UiLanguage>('en');
 const reactiveUiLanguage = fromStore(uiLanguage);
 
 export function setUiLanguage(value: unknown, resolvedLanguage?: unknown) {
   preference = normalizeLanguagePreference(value);
-  currentLanguage =
-    preference === 'system'
-      ? (normalizeUiLanguage(resolvedLanguage) ?? resolveSystemLanguage())
-      : preference;
+  const currentLanguage =
+    preference === 'system' ? (normalizeUiLanguage(resolvedLanguage) ?? 'en') : preference;
   uiLanguage.set(currentLanguage);
 }
 export function getUiLanguage() {
@@ -65,7 +56,7 @@ export function getLanguagePreference() {
   return preference;
 }
 export function getFormatLocale() {
-  return currentLanguage;
+  return getUiLanguage();
 }
 export function translateFromCatalog(
   catalog: PartialCatalog,
